@@ -1,51 +1,108 @@
-import ky from 'ky';
 import fs from 'fs';
+import axios from "axios";
 
-const owner = 'YOUR_GITHUB_USERNAME';
-const repo = 'YOUR_REPOSITORY_NAME';
-const token = 'YOUR_PERSONAL_ACCESS_TOKEN';
-const sinceDate = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+const OWNER = 'SotaYamaguchi';
+const REPO = 'github-pr-comment-insights';
+const TOKEN = '';
+const SINCE_DATE = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
 
-const headers = {
-    'Authorization': `token ${token}`,
-    'Accept': 'application/vnd.github.v3+json'
-};
-
-async function fetchPullRequests() {
-    const response = await ky.get(`https://api.github.com/repos/${owner}/${repo}/pulls`, {
-        headers: headers,
-        searchParams: {
-            state: 'all',
-            since: sinceDate
+const QUERY = `
+  query GetRecentPRs($owner: String!, $repo: String!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequests(first: 100, states: [OPEN, CLOSED, MERGED], orderBy: {field: CREATED_AT, direction: DESC}) {
+        edges {
+          node {
+            title
+            url
+            createdAt
+            reviews(first: 100) {
+              edges {
+                node {
+                  body
+                  createdAt
+                  comments(first: 10) {
+                    edges {
+                      node {
+                        body
+                        createdAt
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            comments(first: 10) {
+              edges {
+                node {
+                  body
+                  createdAt
+                }
+              }
+            }
+          }
         }
-    });
-    return response.json;
+      }
+    }
+  }
+`;
+
+async function fetchReviewComments() {
+    try {
+        const response = await axios.post('https://api.github.com/graphql', {
+            query: QUERY,
+            variables: {
+                owner: OWNER,
+                repo: REPO
+            }
+        }, {
+            headers: {
+                'Authorization': `Bearer ${TOKEN}`
+            }
+        });
+
+        return response.data.data.repository.pullRequests.edges;
+    } catch (error) {
+        console.error("Error fetching PRs:", error);
+    }
 }
 
-async function fetchReviewComments(pullNumber: number) {
-    const response = await ky.get(`https://api.github.com/repos/${owner}/${repo}/pulls/${pullNumber}/comments`, {
-        headers: headers
-    });
-    return response.json;
+// @ts-ignore
+function processComments(edges, csvData, pr) {
+    for (const edge of edges) {
+        const comment = edge.node;
+        if (new Date(comment.createdAt) >= new Date(SINCE_DATE) && comment.body.trim()) {
+            csvData.push([pr.url, pr.title, comment.body, comment.createdAt]);
+        }
+    }
+}
+
+// @ts-ignore
+function processReviewComments(review, csvData, pr) {
+    if (new Date(review.createdAt) >= new Date(SINCE_DATE) && review.body.trim()) {
+        csvData.push([pr.url, pr.title, review.body, review.createdAt]);
+    }
+
+    // Process comments associated with the review
+    for (const commentEdge of review.comments.edges) {
+        const comment = commentEdge.node;
+        if (new Date(comment.createdAt) >= new Date(SINCE_DATE) && comment.body.trim()) {
+            csvData.push([pr.url, pr.title, comment.body, comment.createdAt]);
+        }
+    }
 }
 
 async function main() {
-    const pullRequests = await fetchPullRequests();
-
+    const pullRequests = await fetchReviewComments();
     const csvData = [['Pull Request Link', 'Pull Request Title', 'Review Comment', 'Comment Date']];
 
-    // @ts-ignore
-    for (const pr of pullRequests) {
-        const comments = await fetchReviewComments(pr.number);
-        // @ts-ignore
-        for (const comment of comments) {
-            csvData.push([
-                pr.html_url,
-                pr.title,
-                comment.body,
-                comment.created_at
-            ]);
+    for (const prEdge of pullRequests) {
+        const pr = prEdge.node;
+
+        for (const reviewEdge of pr.reviews.edges) {
+            processReviewComments(reviewEdge.node, csvData, pr);  // Process both main review comment and associated comments
         }
+
+        processComments(pr.comments.edges, csvData, pr); // Process general PR comments
     }
 
     fs.writeFileSync('output.csv', csvData.map(row => row.join(',')).join('\n'));
