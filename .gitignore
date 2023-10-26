@@ -176,3 +176,5 @@ dist
 
 # extensions
 output.csv
+output.json
+tmp_output.json

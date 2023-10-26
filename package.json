@@ -10,6 +10,8 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
+    "@octokit/graphql": "^7.0.2",
+    "@octokit/graphql-schema": "^14.39.0",
     "axios": "^1.5.1"
   }
 }
